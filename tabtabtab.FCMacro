@@ -7,6 +7,7 @@ license: http://unlicense.org/
 __version__ = "2.0"
 
 import os
+import re
 import sys
 
 from PySide import QtCore, QtGui, QtWidgets
@@ -20,6 +21,12 @@ tabtabtab_dir = os.path.join(user_dir, "tabtabtab")
 if not os.path.exists(tabtabtab_dir):
     os.makedirs(tabtabtab_dir)
 WEIGHTS_FILE = os.path.join(tabtabtab_dir, "tabtabtab_weights.json")
+
+def normalize_item_name(item):
+    item_name = item.text()
+    item_name = item_name.replace("&", "")
+    item_name = re.sub(r'^\s*\d+ \s*', '', item_name).strip()
+    return item_name
 
 def find_menu_items(menu, _path = None):
     """Extracts items from a given Nuke menu
@@ -41,10 +48,10 @@ def find_menu_items(menu, _path = None):
     mi = [action for action in menu.actions() if (action.isVisible() and action.isEnabled())]
     for i in mi:
         sub = i.menu()
-        if sub:	
+        item_name = normalize_item_name(i)
+        if sub:
             # Sub-menu, recurse
-            mname = i.text().replace("&", "")
-            subpath = "/".join(x for x in (_path, mname) if x is not None)
+            subpath = "/".join(x for x in (_path, item_name) if x is not None)
 
             sub_found = find_menu_items(menu = i.menu(), _path = subpath)
             found.extend(sub_found)
@@ -56,7 +63,7 @@ def find_menu_items(menu, _path = None):
                 # Skip dividers
                 continue
 
-            subpath = "/".join(x for x in (_path, i.text()) if x is not None)
+            subpath = "/".join(x for x in (_path, item_name) if x is not None)
             found.append({'menuobj': i, 'menupath': subpath})
 
     return found
@@ -324,19 +331,19 @@ class NodeModel(QtCore.QAbstractListModel):
             return raw
 
         elif role == Qt.DecorationRole:
-            weight = self._items[index.row()]['score']
+            icon = self._items[index.row()]['menuobj'].icon()
 
-            hue = 0.4
-            sat = weight
-
-            if index.row() % 2 == 0:
-                col = QtGui.QColor.fromHsvF(hue, sat, 0.9)
-            else:
-                col = QtGui.QColor.fromHsvF(hue, sat, 0.8)
-
-            pix = QtGui.QPixmap(6, 12)
-            pix.fill(col)
-            return pix
+            # hue = 0.4
+            # sat = weight
+            #
+            # if index.row() % 2 == 0:
+            #     col = QtGui.QColor.fromHsvF(hue, sat, 0.9)
+            # else:
+            #     col = QtGui.QColor.fromHsvF(hue, sat, 0.8)
+            #
+            # pix = QtGui.QPixmap(6, 12)
+            # pix.fill(col)
+            return icon
 
         elif role == Qt.BackgroundRole:
             return
@@ -413,7 +420,7 @@ class TabTabTabWidget(QtWidgets.QDialog):
         if winflags is not None:
             self.setWindowFlags(winflags)
 
-        self.resize(400, 500)
+        #self.resize(400, 500)
 
         # Store callback
         self.cb_on_create = on_create
@@ -430,13 +437,14 @@ class TabTabTabWidget(QtWidgets.QDialog):
         menubar = main_window.menuBar()
         for action in menubar.actions():
             if action.menu():
-                menus.extend(find_menu_items(action.menu()))
+                menus.extend(find_menu_items(action.menu(), _path=action.text()))
         nodes = menus 
 
         # List of stuff, and associated model
         self.things_model = NodeModel(nodes, weights = self.weights)
         self.things = QtWidgets.QListView()
         self.things.setModel(self.things_model)
+
 
         # Add input and items to layout
         layout = QtWidgets.QVBoxLayout()
@@ -464,6 +472,54 @@ class TabTabTabWidget(QtWidgets.QDialog):
 
         # Up and down arrow handling
         self.input.pressed_arrow.connect(self.move_selection)
+
+        self._resize_list_to_contents()
+
+        self.adjustSize()
+
+    def _resize_list_to_contents(self):
+        """Compute total size required by the list's rows and set that size."""
+        model = self.things.model()
+        if model is None:
+            return
+
+        rows = model.rowCount()
+        total_h = 0
+        max_w = 0
+
+        for i in range(rows):
+            idx = model.index(i, 0)
+
+            # Height
+            row_h = self.things.sizeHintForRow(i)
+            if row_h <= 0:
+                sh = self.things.sizeHintForIndex(idx)
+                row_h = sh.height() if not sh.isEmpty() else 0
+            total_h += row_h
+
+            # Width
+            sh = self.things.sizeHintForIndex(idx)
+            if not sh.isEmpty():
+                max_w = max(max_w, sh.width())
+
+        if rows > 1:
+            total_h += self.things.spacing() * (rows - 1)
+
+        # include frame width/borders
+        try:
+            fw = self.things.frameWidth()
+        except Exception:
+            fw = 0
+
+        total_h += 2 * fw
+        max_w += 2 * fw
+
+        # apply the computed size
+        if total_h > 0:
+            self.things.setFixedHeight(total_h)
+        if max_w > 0:
+            self.things.setFixedWidth(max_w)
+
 
     def under_cursor(self):
         def clamp(val, mi, ma):
